@@ -1,0 +1,807 @@
+<!DOCTYPE html>
+<html lang="en-US">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width" />
+    <title>Grid Race</title>
+    <style>
+      .grid-controls {
+        display: grid;
+        width: 140px;
+        height: 140px;
+        grid-template-rows: 40px 40px 40px;
+        grid-template-columns: 40px 40px 40px;
+        background-color: gray;
+        padding: 5px;
+        grid-gap: 10px;
+      }
+      .grid-button {
+        width: 40px;
+        height: 40px;
+      }
+      #gridraceTop {
+        height: 50px;
+        font-size: 32px;
+        font-family: monospace;
+      }
+      #gridraceTrack {
+        border: 1px solid #000000;
+        overflow: auto;
+      }
+      #gridraceBottom {
+        display: grid;
+        grid-template-rows: auto;
+        grid-template-columns: 160px auto;
+      }
+      #info {
+        width: 320px;
+        border: 1px solid gray;
+        background-color: black;
+        padding: 6px;
+        font-size: 18px;
+        font-family: monospace;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="gridraceBackground">
+      <div id="gridraceTop">Grid Race (very incomplete, but runs)</div>
+      <canvas id="gridraceTrack"></canvas>
+      <div id="gridraceBottom">
+        <div class="grid-controls">
+          <button id="1" onClick="controlButtonClick(event)">1</button>
+          <button id="2" onClick="controlButtonClick(event)">2</button>
+          <button id="3" onClick="controlButtonClick(event)">3</button>
+          <button id="4" onClick="controlButtonClick(event)">4</button>
+          <button id="5" onClick="controlButtonClick(event)">5</button>
+          <button id="6" onClick="controlButtonClick(event)">6</button>
+          <button id="7" onClick="controlButtonClick(event)">7</button>
+          <button id="8" onClick="controlButtonClick(event)">8</button>
+          <button id="9" onClick="controlButtonClick(event)">9</button>
+        </div>
+        <div id="info"></div>
+      </div>
+    </div>
+  </body>
+  <script>
+    // PLAYERS
+    class Player {
+      constructor(name, colorRGB, stepX, stepY) {
+        this.name = name;
+        this.color = `rgb(${colorRGB} / 100%)`;
+        this.routeColor = `rgb(${colorRGB} / 40%)`;
+        this.route = [];
+        this.stepPosX = stepX;
+        this.stepPosY = stepY;
+        this.stepSpeedX = 0;
+        this.stepSpeedY = 0;
+        this.finished = false; // has reached finish line
+      }
+
+      setSpeed(stepX, stepY) {
+        this.stepSpeedX = stepX;
+        this.stepSpeedY = stepY;
+      }
+
+      addRouteStep(stepX, stepY) {
+        this.route.push({ stepX: stepX, stepY: stepY });
+      }
+
+      setSpeedByNewPosition(toStepX, toStepY) {
+        console.log(">> setSpeedByPositionChange", toStepX, toStepY, this.name);
+        this.stepSpeedX = toStepX - this.stepPosX;
+        this.stepSpeedY = toStepY - this.stepPosY;
+      }
+
+      setPosition(stepX, stepY) {
+        console.log(">> setPosition", stepX, stepY, this.name);
+        this.stepPosX = stepX;
+        this.stepPosY = stepY;
+      }
+    }
+
+    let players = [
+      new Player("Red Baron", "255 0 0", 0, 0),
+      new Player("Green Goblin", "0 255 0", 0, 0),
+      // new Player("Blue Beetle", "0 0 255", 0, 0),
+    ];
+
+    let activePlayerIndex = 0;
+    let thePlayer = players[activePlayerIndex]; // conveniency, shorter to write
+
+    // NOTE: For now type is just block or finish,
+    //       but it could be, e.g. bouncey block
+    //       or area that slows down the speed of
+    //       vehicle but does not block passage...
+    class TrackBlock {
+      constructor(
+        stepX,
+        stepY,
+        stepW,
+        stepH,
+        type = "BLOCKER",
+        color = "rgb(128 128 128 / 90%)"
+      ) {
+        this.stepX = stepX;
+        this.stepY = stepY;
+        this.stepW = stepW;
+        this.stepH = stepH;
+        this.type = type;
+        this.color = color;
+      }
+    }
+
+    const trackBlocks = [
+      // Outer walls
+      new TrackBlock(-1, -1, 26, 1),
+      new TrackBlock(-1, -1, 1, 34),
+      new TrackBlock(-1, 32, 26, 1),
+      new TrackBlock(24, -1, 1, 34),
+      // Inner blockers
+      new TrackBlock(4, 1, 1, 10, "BLOCKER", "rgb(198 128 0 / 40%)"),
+      new TrackBlock(5, 10, 10, 3, "BLOCKER", "rgb(198 128 0 / 40%)"),
+      new TrackBlock(8, 12, 10, 10, "BLOCKER", "rgb(198 128 0 / 40%)"),
+    ];
+
+    const finishLineBlock = new TrackBlock(
+      7,
+      1,
+      0,
+      8,
+      "FINISH",
+      "rgb(232 160 255 / 90%)"
+    );
+
+    const clickableIntersections = [
+      { x: 0, y: 0 },
+      { x: 0, y: 0 },
+      { x: 0, y: 0 },
+      { x: 0, y: 0 },
+      { x: 0, y: 0 },
+      { x: 0, y: 0 },
+      { x: 0, y: 0 },
+      { x: 0, y: 0 },
+      { x: 0, y: 0 },
+    ];
+
+    const stepSize = 20;
+    const xSquares = 24;
+    const ySquares = 32;
+
+    // INFO
+    const infoBoard = document.getElementById("info");
+
+    // CANVAS
+    const c = document.getElementById("gridraceTrack");
+    c.width = 480;
+    c.height = 640;
+    c.addEventListener("click", trackClicked);
+
+    // DRAW CONTEXT
+    const ctx = c.getContext("2d");
+    ctx.fillStyle = "white";
+    ctx.fillRect(0, 0, c.width, c.height);
+
+    drawTrack();
+    drawGuideLines();
+
+    // PREPARE PLAYERS
+    let raceStartStepX = 2; // in squares
+    let raceStartStepY = 2; // in squares
+
+    players.forEach((p) => {
+      p.stepPosX = raceStartStepX;
+      p.stepPosY = raceStartStepY;
+      p.route.push({ stepX: raceStartStepX, stepY: raceStartStepY });
+    });
+
+    drawPlayerSteering();
+
+    // =================================================
+    // =================================================
+
+    /**
+     * controlButtonClick
+     */
+    function controlButtonClick(event) {
+      //
+      // NOTE! Button element IDs are used to identify to which point
+      //       the player wants to move.
+      //
+      let i = -1;
+      try {
+        i = parseInt(event.target.id) - 1; // -1 to get index right
+        if (!clickableIntersections[i].blocked) {
+          executePlayerMovement(
+            clickableIntersections[i].stepX,
+            clickableIntersections[i].stepY
+          );
+        }
+      } catch (e) {
+        console.log("BAD BUTTON ID:", event.target.id);
+        console.log("Caught:", e);
+      }
+    }
+
+    /**
+     * drawVehicles
+     */
+    function drawVehicles() {
+      players.forEach((p) => drawDot(p.color, p.stepPosX, p.stepPosY, true));
+    }
+
+    /**
+     * drawPlayerSteering
+     */
+    function drawPlayerSteering() {
+      let steerX = thePlayer.stepPosX + thePlayer.stepSpeedX;
+      let steerY = thePlayer.stepPosY + thePlayer.stepSpeedY;
+
+      drawDot("gray", steerX - 1, steerY - 1);
+      drawDot("gray", steerX, steerY - 1);
+      drawDot("gray", steerX + 1, steerY - 1);
+      drawDot("gray", steerX - 1, steerY);
+      drawDot(thePlayer.routeColor, steerX, steerY, true);
+      drawDot("gray", steerX + 1, steerY);
+      drawDot("gray", steerX - 1, steerY + 1);
+      drawDot("gray", steerX, steerY + 1);
+      drawDot("gray", steerX + 1, steerY + 1);
+
+      // For checking if click on track hits one of these
+      // or to get x,y for clicked control button.
+      clickableIntersections[0] = {
+        stepX: steerX - 1,
+        stepY: steerY - 1,
+        blocked: false,
+      }; // NW
+      clickableIntersections[1] = {
+        stepX: steerX,
+        stepY: steerY - 1,
+        blocked: false,
+      }; // N
+      clickableIntersections[2] = {
+        stepX: steerX + 1,
+        stepY: steerY - 1,
+        blocked: false,
+      }; // NE
+      clickableIntersections[3] = {
+        stepX: steerX - 1,
+        stepY: steerY,
+        blocked: false,
+      }; // W
+      clickableIntersections[4] = {
+        stepX: steerX,
+        stepY: steerY,
+        blocked: false,
+      }; // MID
+      clickableIntersections[5] = {
+        stepX: steerX + 1,
+        stepY: steerY,
+        blocked: false,
+      }; // E
+      clickableIntersections[6] = {
+        stepX: steerX - 1,
+        stepY: steerY + 1,
+        blocked: false,
+      }; // SW
+      clickableIntersections[7] = {
+        stepX: steerX,
+        stepY: steerY + 1,
+        blocked: false,
+      }; // S
+      clickableIntersections[8] = {
+        stepX: steerX + 1,
+        stepY: steerY + 1,
+        blocked: false,
+      }; // SE
+
+      players.forEach((p) => {
+        if (thePlayer != p) {
+          clickableIntersections.forEach((ci) => {
+            ci.blocked = p.stepPosX === ci.stepX && p.stepPosY === ci.stepY;
+            // console.log("blocked =", ci.blocked, ci.stepX, ci.stepY);
+          });
+        }
+      });
+    }
+
+    /**
+     * trackClicked
+     */
+    function trackClicked(event) {
+      console.log(
+        "CLICK",
+        event.offsetX,
+        event.offsetY,
+        Math.round(event.offsetX / stepSize),
+        Math.round(event.offsetY / stepSize),
+        thePlayer.name
+      );
+
+      // Pixels to steps
+      let stepX = Math.round(event.offsetX / stepSize);
+      let stepY = Math.round(event.offsetY / stepSize);
+      console.log("CLICKABLES:", clickableIntersections);
+      if (
+        clickableIntersections.find(
+          (v) => v.stepX === stepX && v.stepY === stepY && !v.blocked
+        )
+      ) {
+        executePlayerMovement(stepX, stepY);
+      } else {
+        // Clicked non-clickable intersection, but if vehicle
+        // steering (midpoint) is outside of canvas then
+        // we accept click and execute movement as if midpoint
+        // would have been clicked.
+        if (isSteeringOutOfCanvas()) {
+          executePlayerMovement(
+            thePlayer.stepPosX + thePlayer.stepSpeedX,
+            thePlayer.stepPosY + thePlayer.stepSpeedY
+          );
+        }
+      }
+    }
+
+    /**
+     * isSteeringOutOfCanvas
+     */
+    function isSteeringOutOfCanvas() {
+      let midX = thePlayer.stepPosX + thePlayer.stepSpeedX;
+      let midY = thePlayer.stepPosY + thePlayer.stepSpeedY;
+      return midX < 0 || midX > xSquares || midY < 0 || midY > ySquares;
+    }
+
+    /**
+     * executePlayerMovement
+     */
+    function executePlayerMovement(stepX, stepY) {
+      console.log(">> executePlayerMovement", stepX, stepY, thePlayer.name);
+      thePlayer.setSpeedByNewPosition(stepX, stepY);
+
+      let finished = checkForFinishLine(
+        thePlayer.stepPosX,
+        thePlayer.stepPosY,
+        stepX,
+        stepY
+      );
+
+      if (finished) {
+        console.log("### FINISHED ###", finished);
+        thePlayer.finished = true;
+        thePlayer.stepSpeedX = 0;
+        thePlayer.stepSpeedY = 0;
+        stepX = Math.floor(finished.x / stepSize);
+        stepY = Math.floor(finished.y / stepSize);
+      } else {
+        let collision = checkForCollision(
+          thePlayer.stepPosX,
+          thePlayer.stepPosY,
+          stepX,
+          stepY
+        );
+
+        if (collision) {
+          // NOTE: collision is in pixels, not in steps!
+          let collisionStepX = Math.round(collision.x / stepSize);
+          let collisionStepY = Math.round(collision.y / stepSize);
+
+          console.log(
+            "** COLLISION **",
+            collision,
+            collisionStepX,
+            collisionStepY
+          );
+
+          addToPlayerRoute(collisionStepX, collisionStepY);
+
+          // Move vehicle away from collision point.
+          if (thePlayer.stepSpeedX < 0) {
+            collisionStepX += 1;
+          } else if (thePlayer.stepSpeedX > 0) {
+            collisionStepX -= 1;
+          }
+          if (thePlayer.stepSpeedY < 0) {
+            collisionStepY += 1;
+          } else if (thePlayer.stepSpeedY > 0) {
+            collisionStepY -= 1;
+          }
+
+          addToPlayerRoute(collisionStepX, collisionStepY);
+
+          thePlayer.stepPosX = collisionStepX;
+          thePlayer.stepPosY = collisionStepY;
+          thePlayer.stepSpeedX = 0;
+          thePlayer.stepSpeedY = 0;
+          stepX = thePlayer.stepPosX;
+          stepY = thePlayer.stepPosY;
+        }
+      }
+
+      moveVehicle(stepX, stepY);
+
+      if (nextPlayer()) {
+        drawPlayerSteering();
+        drawVehicles();
+        showActivePlayer();
+      } else {
+        drawVehicles();
+        showLeaderboard();
+      }
+    }
+
+    /**
+     * isRaceFinished
+     */
+    function isRaceFinished() {
+      let isFinished = true;
+      players.forEach((p) => (isFinished &= p.finished));
+      console.log("RACE isFinished", isFinished);
+      return isFinished;
+    }
+
+    /**
+     * nextPlayer
+     */
+    function nextPlayer() {
+      if (!isRaceFinished()) {
+        // Not all players have finished yet
+        do {
+          activePlayerIndex += 1;
+          if (activePlayerIndex > players.length - 1) {
+            activePlayerIndex = 0;
+          }
+        } while (players[activePlayerIndex].finished);
+
+        console.log(
+          "NEXT: activePlayer",
+          activePlayerIndex,
+          players[activePlayerIndex].name
+        );
+
+        // Update the conveniency variable
+        thePlayer = players[activePlayerIndex];
+
+        return true;
+      } else {
+        console.log("NEXT: The race is finished");
+        return false;
+      }
+    }
+
+    /**
+     * moveVehicle
+     */
+    function moveVehicle(stepX, stepY) {
+      console.log(">> moveVehicle", stepX, stepY, thePlayer.name);
+      clearBackground();
+      drawTrack();
+      drawGuideLines();
+      thePlayer.setPosition(stepX, stepY);
+      addToPlayerRoute(stepX, stepY);
+      drawPlayersRoutes();
+    }
+
+    /**
+     * addToPlayerRoute
+     */
+    function addToPlayerRoute(stepX, stepY) {
+      console.log(">> addToPlayerRoute", stepX, stepY, thePlayer.name);
+      thePlayer.route.push({ stepX: stepX, stepY: stepY });
+    }
+
+    /**
+     * drawPlayersRoutes
+     */
+    function drawPlayersRoutes() {
+      players.forEach((p) => {
+        console.log(
+          ">> drawPlayersRoutes",
+          thePlayer.route.length,
+          thePlayer.name
+        );
+        ctx.beginPath();
+        ctx.lineWidth = 3;
+        ctx.strokeStyle = p.routeColor;
+        ctx.setLineDash([5, 5]);
+        ctx.moveTo(stepSize * p.route[0].stepX, stepSize * p.route[0].stepY);
+        p.route.forEach((pos) => {
+          ctx.lineTo(stepSize * pos.stepX, stepSize * pos.stepY);
+        });
+        ctx.stroke();
+        ctx.setLineDash([]);
+      });
+    }
+
+    /**
+     * drawDot
+     */
+    function drawDot(color, stepX, stepY, larger = false) {
+      // console.log("DRAW DOT:", color, stepX, stepY, stepSize, larger);
+      let dotR = larger ? 3 : 2;
+      ctx.beginPath();
+      ctx.arc(stepX * stepSize, stepY * stepSize, dotR, 0, 2 * Math.PI);
+      ctx.fillStyle = color;
+      ctx.fill();
+      ctx.lineWidth = 1;
+      ctx.strokeStyle = "black";
+      ctx.stroke();
+    }
+
+    /**
+     * drawGuideLines
+     */
+    function drawGuideLines() {
+      // GUIDE LINES
+      ctx.beginPath();
+      ctx.lineWidth = 1;
+      ctx.strokeStyle = "rgb(0 0 128 / 20%)";
+      for (let x = 0; x <= xSquares * stepSize; x += stepSize) {
+        ctx.moveTo(x, 0);
+        ctx.lineTo(x, ySquares * stepSize);
+      }
+      for (let y = 0; y <= ySquares * stepSize; y += stepSize) {
+        ctx.moveTo(0, y);
+        ctx.lineTo(xSquares * stepSize, y);
+      }
+      ctx.stroke();
+    }
+
+    /**
+     * clearBackground
+     */
+    function clearBackground() {
+      ctx.beginPath();
+      ctx.fillStyle = "white";
+      ctx.fillRect(0, 0, c.width, c.height);
+      ctx.stroke();
+    }
+
+    /**
+     * drawTrack
+     */
+    function drawTrack() {
+      ctx.beginPath();
+      ctx.lineWidth = 3;
+      trackBlocks.forEach((b) => {
+        let x = b.stepX * stepSize;
+        let y = b.stepY * stepSize;
+        let w = b.stepW * stepSize;
+        let h = b.stepH * stepSize;
+        // Put a little extra around the block
+        // so the intersections that are affected
+        // by track are inside the block.
+        x -= Math.floor(stepSize / 2);
+        y -= Math.floor(stepSize / 2);
+        w += stepSize;
+        h += stepSize;
+
+        ctx.strokeStyle = b.color;
+        ctx.fillStyle = b.color;
+        ctx.fillRect(x, y, w, h);
+      });
+      ctx.stroke();
+
+      drawFinishLine();
+    }
+
+    /**
+     * drawFinishLine
+     */
+    function drawFinishLine() {
+      ctx.beginPath();
+      ctx.lineWidth = 3;
+      let x = finishLineBlock.stepX * stepSize;
+      let y = finishLineBlock.stepY * stepSize;
+      let w = finishLineBlock.stepW * stepSize;
+      let h = finishLineBlock.stepH * stepSize;
+      // Put a little extra around the block
+      // so the intersections that are affected
+      // by track are inside the block.
+      x -= Math.floor(stepSize / 2);
+      y -= Math.floor(stepSize / 2);
+      w += stepSize;
+      h += stepSize;
+
+      ctx.strokeStyle = finishLineBlock.color;
+      ctx.fillStyle = finishLineBlock.color;
+      ctx.fillRect(x, y, w, h);
+      ctx.stroke();
+    }
+
+    // COLLISON FUNCTIONS ***************************************
+
+    function checkForFinishLine(vehiclePosX, vehiclePosY, stepX, stepY) {
+      let collision;
+      let intersections = getRectangleLineIntersections(
+        finishLineBlock.stepX * stepSize,
+        finishLineBlock.stepY * stepSize,
+        (finishLineBlock.stepX + finishLineBlock.stepW) * stepSize,
+        (finishLineBlock.stepY + finishLineBlock.stepH) * stepSize,
+        vehiclePosX * stepSize,
+        vehiclePosY * stepSize,
+        stepX * stepSize,
+        stepY * stepSize
+      );
+      if (intersections.length > 0) {
+        collision = getClosestOfDetectedCollision(
+          vehiclePosX * stepSize,
+          vehiclePosY * stepSize,
+          intersections
+        );
+      }
+      return collision;
+    }
+
+    function checkForCollision(vehiclePosX, vehiclePosY, stepX, stepY) {
+      let collision;
+      let allIntersections = [];
+
+      trackBlocks.forEach((block, i) => {
+        let intersections = getRectangleLineIntersections(
+          block.stepX * stepSize,
+          block.stepY * stepSize,
+          (block.stepX + block.stepW) * stepSize,
+          (block.stepY + block.stepH) * stepSize,
+          vehiclePosX * stepSize,
+          vehiclePosY * stepSize,
+          stepX * stepSize,
+          stepY * stepSize
+        );
+        if (intersections.length > 0) {
+          intersections.forEach((hit) => allIntersections.push(hit));
+        }
+      });
+
+      // Now we have all intersections of all blocks, this should
+      // handle cases where track blocks are overlapping and causing
+      // trouble when determining closest collision point.
+      if (allIntersections.length > 0) {
+        collision = getClosestOfDetectedCollision(
+          vehiclePosX * stepSize,
+          vehiclePosY * stepSize,
+          allIntersections
+        );
+      }
+
+      return collision;
+    }
+
+    function getClosestOfDetectedCollision(posX, posY, intersections) {
+      let closestCollision = 0;
+      let distance = 999999;
+
+      for (let i = 0; i < intersections.length; i++) {
+        console.log(
+          `CLOSEST TO (${posX}, ${posY}) ~ (${intersections[i].x}, ${intersections[i].y})`,
+          thePlayer.stepPosX,
+          thePlayer.stepPosY,
+          thePlayer.route[thePlayer.route.length - 1].stepX,
+          thePlayer.route[thePlayer.route.length - 1].stepY
+        );
+        if (
+          distance >
+          distanceBetween(posX, posY, intersections[i].x, intersections[i].y)
+        ) {
+          closestCollision = i;
+          distance = distanceBetween(
+            posX,
+            posY,
+            intersections[i].x,
+            intersections[i].y
+          );
+        }
+      }
+      //console.log("  closest collision:", intersections[closestCollision]);
+      return intersections[closestCollision];
+    }
+
+    function distanceBetween(x1, y1, x2, y2) {
+      // Distance of two points: d=√((x2 – x1)² + (y2 – y1)²)
+      return Math.round(
+        Math.sqrt((x1 - x2) * (x1 - x2) + (y1 - y2) * (y1 - y2))
+      );
+    }
+
+    // Helper function to check if two lines intersect and return the intersection point if they do
+    function getLineIntersection(x1, y1, x2, y2, x3, y3, x4, y4) {
+      const denom = (y4 - y3) * (x2 - x1) - (x4 - x3) * (y2 - y1);
+
+      // TODO: Problem here is that parallel line segments could overlap
+      //       and that should be collision!
+      //       Workaround for this is not to use single line blocks
+      //       i.e. always have W > 0 & H > 0.
+
+      if (denom === 0) {
+        // Lines are parallel or coincident, so no intersection
+        return null;
+      }
+
+      const ua = ((x4 - x3) * (y1 - y3) - (y4 - y3) * (x1 - x3)) / denom;
+      const ub = ((x2 - x1) * (y1 - y3) - (y2 - y1) * (x1 - x3)) / denom;
+
+      if (ua >= 0 && ua <= 1 && ub >= 0 && ub <= 1) {
+        // Calculate the intersection point
+        const intersectionX = x1 + ua * (x2 - x1);
+        const intersectionY = y1 + ua * (y2 - y1);
+        return { x: intersectionX, y: intersectionY };
+      }
+
+      // No intersection within the line segments
+      return null;
+    }
+
+    // Main function to check if a line intersects with a rectangle and return the intersection points
+    function getRectangleLineIntersections(
+      rectX1,
+      rectY1,
+      rectX2,
+      rectY2,
+      lineX1,
+      lineY1,
+      lineX2,
+      lineY2
+    ) {
+      const intersections = [];
+
+      // Rectangle corners
+      const topLeft = [rectX1, rectY1];
+      const topRight = [rectX2, rectY1];
+      const bottomLeft = [rectX1, rectY2];
+      const bottomRight = [rectX2, rectY2];
+
+      // Check intersection with all four edges of the rectangle
+      const edges = [
+        [topLeft[0], topLeft[1], topRight[0], topRight[1], "top"], // top edge
+        [topRight[0], topRight[1], bottomRight[0], bottomRight[1], "right"], // right edge
+        [
+          bottomRight[0],
+          bottomRight[1],
+          bottomLeft[0],
+          bottomLeft[1],
+          "bottom",
+        ], // bottom edge
+        [bottomLeft[0], bottomLeft[1], topLeft[0], topLeft[1], "left"], // left edge
+      ];
+
+      for (const [x1, y1, x2, y2, e] of edges) {
+        const intersection = getLineIntersection(
+          lineX1,
+          lineY1,
+          lineX2,
+          lineY2,
+          x1,
+          y1,
+          x2,
+          y2
+        );
+        if (intersection) {
+          intersection.edge = e;
+          intersections.push(intersection);
+        }
+      }
+
+      return intersections;
+    }
+
+    /**
+     * showActivePlayer
+     */
+    function showActivePlayer() {
+      infoBoard.innerHTML = "<p>";
+      infoBoard.innerHTML += `<b style="color: ${thePlayer.color}">${thePlayer.name}'s move</b>`;
+      infoBoard.innerHTML += "</p>";
+    }
+
+    /**
+     * showLeaderboard
+     */
+    function showLeaderboard() {
+      infoBoard.innerHTML = "<ul>";
+      players.forEach(
+        (p) =>
+          (infoBoard.innerHTML += `<li style="color: white">${p.name} used ${p.route.length} moves</li>`)
+      );
+      infoBoard.innerHTML += "</ul>";
+    }
+  </script>
+</html>
